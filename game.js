@@ -5,6 +5,119 @@ let gameState = 'waiting_for_roll';
 let lastRollValue = 0;
 let bonusTurnsRemaining = 0;
 let finishedPlayers = [];
+let soundMuted = false;
+
+/* Web Audio Synthesizer Engine */
+let audioCtx = null;
+
+function getAudioContext() {
+    if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext();
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+    return audioCtx;
+}
+
+function toggleSound() {
+    soundMuted = !soundMuted;
+    document.getElementById('sound-btn').innerText = soundMuted ? '🔇' : '🔊';
+}
+
+function playSound(type) {
+    if (soundMuted) return;
+    try {
+        const ctx = getAudioContext();
+        const now = ctx.currentTime;
+
+        if (type === 'roll') {
+            // Pit rattle sound
+            for (let i = 0; i < 4; i++) {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150 + Math.random() * 200, now + i * 0.04);
+                gain.gain.setValueAtTime(0.08, now + i * 0.04);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.04 + 0.03);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(now + i * 0.04);
+                osc.stop(now + i * 0.04 + 0.03);
+            }
+        } else if (type === 'step') {
+            // Lightweight tap sound
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(400, now);
+            gain.gain.setValueAtTime(0.1, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.05);
+        } else if (type === 'release') {
+            // Yard release sweep sound
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(300, now);
+            osc.frequency.exponentialRampToValueAtTime(700, now + 0.15);
+            gain.gain.setValueAtTime(0.12, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.15);
+        } else if (type === 'capture') {
+            // Crunchy capture/attack sound
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(250, now);
+            osc.frequency.exponentialRampToValueAtTime(80, now + 0.2);
+            gain.gain.setValueAtTime(0.2, now);
+            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.2);
+        } else if (type === 'home') {
+            // Reaching home sound
+            [523.25, 659.25].forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, now + i * 0.1);
+                gain.gain.setValueAtTime(0.15, now + i * 0.1);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.1 + 0.2);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(now + i * 0.1);
+                osc.stop(now + i * 0.1 + 0.2);
+            });
+        } else if (type === 'victory') {
+            // Winning fanfare sequence
+            const notes = [440, 554.37, 659.25, 880];
+            notes.forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(freq, now + i * 0.12);
+                gain.gain.setValueAtTime(0.18, now + i * 0.12);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.12 + 0.25);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(now + i * 0.12);
+                osc.stop(now + i * 0.12 + 0.25);
+            });
+        }
+    } catch (e) {
+        console.log("Audio not allowed yet or not supported.");
+    }
+}
 
 const GOAL_CELL = 12;
 const safeCells = [2, 10, 14, 22];
@@ -98,6 +211,8 @@ function initBoard() {
 
 function rollPits(playerColor, forcedRoll = null) {
     if (gameState !== 'waiting_for_roll' || PLAYERS[currentPlayerIndex] !== playerColor) return;
+
+    playSound('roll');
 
     let pits = [];
     let roundCount = 0;
@@ -203,6 +318,7 @@ function evaluateMoves(player, roll, yardReleaseMax) {
 }
 
 function executeYardRelease(player, targetTokens) {
+    playSound('release');
     targetTokens.forEach(token => { token.zone = 'outer'; token.pos = 0; });
     if (checkCaptures(player, startCells[player])) bonusTurnsRemaining += 1;
     clearHighlights();
@@ -217,6 +333,7 @@ async function executeBoardMove(player, token, steps) {
     for (let i = 0; i < steps.length; i++) {
         token.pos = steps[i].pos;
         token.zone = steps[i].zone;
+        playSound('step');
         updateUI();
         await sleep(200);
     }
@@ -228,7 +345,9 @@ async function executeBoardMove(player, token, steps) {
     if (finalStep.zone === 'outer') actualBoardCell = path.outer[finalStep.pos];
     else if (finalStep.zone === 'inner') actualBoardCell = path.inner[finalStep.pos];
 
-    if (finalStep.zone !== 'goal' && checkCaptures(player, actualBoardCell)) {
+    if (finalStep.zone === 'goal') {
+        playSound('home');
+    } else if (checkCaptures(player, actualBoardCell)) {
         bonusTurnsRemaining += 1;
     }
     completeTurn();
@@ -252,6 +371,8 @@ function checkCaptures(activePlayer, boardCellIndex) {
             }
         });
     });
+
+    if (capturedAny) playSound('capture');
     return capturedAny;
 }
 
@@ -265,6 +386,7 @@ function completeTurn() {
     }
 
     if (finishedPlayers.length === 3) {
+        playSound('victory');
         let loser = PLAYERS.find(p => !finishedPlayers.includes(p));
         const suffixes = ['1st', '2nd', '3rd'];
         let rankSummary = finishedPlayers.map((p, i) => `${suffixes[i]} Place: ${p.toUpperCase()}`).join('\n');

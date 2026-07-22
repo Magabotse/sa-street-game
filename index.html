@@ -8,14 +8,15 @@
 </head>
 <body data-theme="mzansi">
 
-    <!-- Theme Selector Bar -->
+    <!-- Theme & Sound Selector Bar -->
     <div class="theme-bar">
-        <label for="theme-select">🎨 Board Theme:</label>
+        <label for="theme-select">🎨</label>
         <select id="theme-select" onchange="changeTheme(this.value)">
             <option value="mzansi">🇿🇦 Mzansi Street Art</option>
             <option value="synthwave">🎮 Arcade Synthwave</option>
             <option value="wood">🪵 Traditional Wood & Clay</option>
         </select>
+        <button id="sound-btn" onclick="toggleSound()" title="Toggle Sound">🔊</button>
     </div>
 
     <div id="board"></div>

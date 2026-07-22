@@ -66,7 +66,7 @@ body {
     transition: background-color 0.4s ease;
 }
 
-/* Theme Bar Controls */
+/* Theme & Sound Bar Controls */
 .theme-bar {
     margin-bottom: 8px;
     background: rgba(255, 255, 255, 0.05);
@@ -91,6 +91,21 @@ body {
     border-radius: 6px;
     cursor: pointer;
     font-weight: bold;
+}
+
+#sound-btn {
+    background: transparent;
+    border: 1px solid var(--yard-border);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 16px;
+    padding: 3px 8px;
+    cursor: pointer;
+    transition: transform 0.1s;
+}
+
+#sound-btn:active {
+    transform: scale(0.9);
 }
 
 /* Board Grid with Responsive Sizing */
