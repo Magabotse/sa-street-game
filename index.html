@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SA Street Game</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body data-theme="mzansi">
+
+    <!-- Theme Selector Bar -->
+    <div class="theme-bar">
+        <label for="theme-select">🎨 Board Theme:</label>
+        <select id="theme-select" onchange="changeTheme(this.value)">
+            <option value="mzansi">🇿🇦 Mzansi Street Art</option>
+            <option value="synthwave">🎮 Arcade Synthwave</option>
+            <option value="wood">🪵 Traditional Wood & Clay</option>
+        </select>
+    </div>
+
+    <div id="board"></div>
+
+    <div id="roll-status">Status</div>
+
+    <div class="pits-container">
+        <div id="pit-0" class="pit flat"></div>
+        <div id="pit-1" class="pit flat"></div>
+        <div id="pit-2" class="pit flat"></div>
+        <div id="pit-3" class="pit flat"></div>
+    </div>
+
+    <!-- Custom Modal Overlay -->
+    <div id="game-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h2 id="modal-title">Notice</h2>
+            <p id="modal-message">Message text goes here.</p>
+            <button id="modal-btn">OK</button>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
+
