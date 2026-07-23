@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>SA Street Game</title>
     <link rel="stylesheet" href="style.css">
+    <!-- PeerJS for WebRTC Link Multiplayer -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body data-theme="mzansi">
 
@@ -19,23 +21,121 @@
         <button id="sound-btn" onclick="toggleSound()" title="Toggle Sound">🔊</button>
     </div>
 
-    <div id="board"></div>
-
-    <div id="roll-status">Status</div>
-
-    <div class="pits-container">
-        <div id="pit-0" class="pit flat"></div>
-        <div id="pit-1" class="pit flat"></div>
-        <div id="pit-2" class="pit flat"></div>
-        <div id="pit-3" class="pit flat"></div>
+    <!-- 1. MAIN MENU SCREEN -->
+    <div id="main-menu" class="menu-screen">
+        <h1 class="menu-title">SA STREET GAME</h1>
+        <p class="menu-subtitle">Choose Game Mode</p>
+        
+        <div class="menu-buttons">
+            <button class="menu-btn" onclick="showPlayerCountMenu()">👥 Local Pass & Play</button>
+            <button class="menu-btn" onclick="startVsComputerSolo()">🤖 Solo vs 3 Computers</button>
+            <button class="menu-btn level-medium" onclick="showLinkMenu()">🔗 Online Room Link</button>
+        </div>
     </div>
 
-    <!-- Custom Modal Overlay -->
+    <!-- 2. LINK GAMEPLAY MENU -->
+    <div id="link-menu" class="menu-screen" style="display: none;">
+        <h2 class="menu-title">Online Link Mode</h2>
+        <p class="menu-subtitle">Host a room or enter a room code to join</p>
+        
+        <div class="menu-buttons">
+            <button class="menu-btn level-easy" onclick="createRoom()">🏠 Create Host Room</button>
+            <div style="margin: 10px 0; display: flex; gap: 8px; width: 100%;">
+                <input type="text" id="join-code-input" placeholder="Enter Room Code" style="flex:1; padding: 10px; border-radius: 6px; border: 1px solid #555; text-transform: uppercase; font-weight: bold; text-align: center;">
+                <button class="menu-btn level-medium" style="width: auto; padding: 10px 16px;" onclick="joinRoomFromInput()">Join</button>
+            </div>
+            <button class="menu-btn back-btn" onclick="showMainMenu()">⬅ Back</button>
+        </div>
+    </div>
+
+    <!-- 3. ONLINE LOBBY SCREEN -->
+    <div id="lobby-menu" class="menu-screen" style="display: none;">
+        <h2 class="menu-title">Room Lobby</h2>
+        <p class="menu-subtitle">Share code with friends to join</p>
+        
+        <div style="background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; margin-bottom: 15px; width: 100%;">
+            <span style="font-size: 12px; color: #aaa;">ROOM CODE</span>
+            <div id="lobby-code-display" style="font-size: 24px; font-weight: bold; color: var(--yard-border); letter-spacing: 2px;">---</div>
+            <button onclick="copyRoomLink()" style="margin-top: 6px; font-size: 11px; padding: 4px 8px; cursor: pointer;">📋 Copy Invite Link</button>
+        </div>
+
+        <div style="width: 100%; text-align: left; margin-bottom: 15px;">
+            <strong style="font-size: 13px; color: #ccc;">Connected Players:</strong>
+            <ul id="lobby-player-list" style="list-style: none; padding: 0; margin: 8px 0; font-size: 14px;"></ul>
+        </div>
+
+        <div class="menu-buttons">
+            <button id="start-link-game-btn" class="menu-btn level-easy" style="display: none;" onclick="hostStartLinkGame()">🚀 Start Game</button>
+            <button class="menu-btn back-btn" onclick="leaveLinkLobby()">⬅ Leave Room</button>
+        </div>
+    </div>
+
+    <!-- 4. PLAYER COUNT SELECTION SCREEN -->
+    <div id="player-count-menu" class="menu-screen" style="display: none;">
+        <h2 class="menu-title">Number of Players</h2>
+        <p class="menu-subtitle">How many human players are playing?</p>
+        
+        <div class="menu-buttons">
+            <button class="menu-btn" onclick="selectPlayerCount(2)">2 Players</button>
+            <button class="menu-btn" onclick="selectPlayerCount(3)">3 Players</button>
+            <button class="menu-btn" onclick="selectPlayerCount(4)">4 Players (Full Board)</button>
+            <button class="menu-btn back-btn" onclick="showMainMenu()">⬅ Back</button>
+        </div>
+    </div>
+
+    <!-- 5. CPU FILL PROMPT SCREEN -->
+    <div id="cpu-prompt-menu" class="menu-screen" style="display: none;">
+        <h2 class="menu-title">Fill Empty Slots?</h2>
+        <p id="cpu-prompt-text" class="menu-subtitle">Fill remaining slots with CPU bots?</p>
+        
+        <div class="menu-buttons">
+            <button class="menu-btn level-easy" onclick="showDifficultyMenuForFill()">🤖 Yes, Add CPUs</button>
+            <button class="menu-btn level-medium" onclick="startLocalGameWithoutCpu()">👥 No, Just Humans</button>
+            <button class="menu-btn back-btn" onclick="showPlayerCountMenu()">⬅ Back</button>
+        </div>
+    </div>
+
+    <!-- 6. DIFFICULTY SELECTION SCREEN -->
+    <div id="difficulty-menu" class="menu-screen" style="display: none;">
+        <h2 class="menu-title">Select CPU Difficulty</h2>
+        <p class="menu-subtitle">Set difficulty for computer opponents</p>
+        
+        <div class="menu-buttons">
+            <button class="menu-btn level-easy" onclick="confirmDifficultyAndStart(1)">🟢 Level 1: Easy</button>
+            <button class="menu-btn level-medium" onclick="confirmDifficultyAndStart(2)">🟡 Level 2: Medium</button>
+            <button class="menu-btn level-hard" onclick="confirmDifficultyAndStart(3)">🔴 Level 3: Hard</button>
+            <button class="menu-btn back-btn" onclick="handleDifficultyBack()">⬅ Back</button>
+        </div>
+    </div>
+
+    <!-- 7. MAIN GAME SCREEN -->
+    <div id="game-screen" style="display: none;">
+        <div class="game-header">
+            <button class="home-btn" onclick="confirmReturnToMenu()">🏠 Menu</button>
+            <div id="mode-badge" class="mode-badge">4 Players</div>
+        </div>
+
+        <div id="board"></div>
+
+        <div id="roll-status">Status</div>
+
+        <div class="pits-container">
+            <div id="pit-0" class="pit flat"></div>
+            <div id="pit-1" class="pit flat"></div>
+            <div id="pit-2" class="pit flat"></div>
+            <div id="pit-3" class="pit flat"></div>
+        </div>
+    </div>
+
+    <!-- Modal -->
     <div id="game-modal" class="modal-overlay">
         <div class="modal-content">
             <h2 id="modal-title">Notice</h2>
             <p id="modal-message">Message text goes here.</p>
-            <button id="modal-btn">OK</button>
+            <div id="modal-actions" class="modal-actions">
+                <button id="modal-btn-primary" class="modal-btn">OK</button>
+                <button id="modal-btn-secondary" class="modal-btn secondary" style="display: none;">Secondary</button>
+            </div>
         </div>
     </div>
 

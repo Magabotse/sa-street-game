@@ -1,13 +1,208 @@
-const PLAYERS = ['red', 'green', 'blue', 'yellow'];
+const ALL_PLAYERS = ['red', 'green', 'blue', 'yellow'];
 
+let activePlayers = ['red', 'green', 'blue', 'yellow'];
 let currentPlayerIndex = 0;
 let gameState = 'waiting_for_roll';
 let lastRollValue = 0;
 let bonusTurnsRemaining = 0;
 let finishedPlayers = [];
 let soundMuted = false;
+let isObserving = false;
 
-/* Web Audio Synthesizer Engine */
+// Mode & AI settings
+let selectedHumanCount = 4;
+let fillWithCpu = false;
+let aiDifficulty = 1;
+let playerTypes = { red: 'human', green: 'human', blue: 'human', yellow: 'human' };
+
+/* ===================================================
+   ONLINE LINK / WEBRTC MULTIPLAYER LOGIC
+   =================================================== */
+let peer = null;
+let roomConnections = []; // Host: array of conns
+let hostConn = null; // Client: conn to host
+let isHost = false;
+let myAssignedColor = null;
+let currentRoomCode = null;
+
+function showLinkMenu() {
+    hideAllScreens();
+    document.getElementById('link-menu').style.display = 'flex';
+}
+
+function generateRoomCode() {
+    return Math.random().toString(36).substring(2, 6).toUpperCase();
+}
+
+function createRoom() {
+    currentRoomCode = generateRoomCode();
+    isHost = true;
+    myAssignedColor = 'red';
+    roomConnections = [];
+
+    peer = new Peer(`sagame-${currentRoomCode}`);
+
+    peer.on('open', (id) => {
+        setupLobbyUI();
+    });
+
+    peer.on('connection', (conn) => {
+        if (roomConnections.length >= 3) {
+            conn.send({ type: 'error', message: 'Room full!' });
+            setTimeout(() => conn.close(), 500);
+            return;
+        }
+
+        roomConnections.push(conn);
+        let assignedColor = ALL_PLAYERS[roomConnections.length];
+
+        conn.on('open', () => {
+            conn.send({ type: 'init_client', color: assignedColor, roomCode: currentRoomCode });
+            broadcastLobbyState();
+        });
+
+        conn.on('data', (data) => handleNetworkData(data));
+
+        conn.on('close', () => {
+            roomConnections = roomConnections.filter(c => c !== conn);
+            broadcastLobbyState();
+        });
+    });
+
+    peer.on('error', (err) => {
+        showModal("Connection Error", "Could not create room. Try again.");
+    });
+}
+
+function joinRoomFromInput() {
+    let code = document.getElementById('join-code-input').value.trim().toUpperCase();
+    if (!code) return;
+    joinRoom(code);
+}
+
+function joinRoom(code) {
+    isHost = false;
+    currentRoomCode = code;
+    peer = new Peer();
+
+    peer.on('open', () => {
+        hostConn = peer.connect(`sagame-${code}`);
+
+        hostConn.on('open', () => {
+            // Connected to host
+        });
+
+        hostConn.on('data', (data) => handleNetworkData(data));
+
+        hostConn.on('close', () => {
+            showModal("Disconnected", "Host closed the room.", "OK", () => showMainMenu());
+        });
+    });
+
+    peer.on('error', (err) => {
+        showModal("Join Error", "Room not found or unavailable.");
+    });
+}
+
+function broadcastNetworkData(data) {
+    if (isHost) {
+        roomConnections.forEach(c => c.send(data));
+    } else if (hostConn) {
+        hostConn.send(data);
+    }
+}
+
+function handleNetworkData(data) {
+    if (data.type === 'init_client') {
+        myAssignedColor = data.color;
+        currentRoomCode = data.roomCode;
+        setupLobbyUI();
+    } else if (data.type === 'lobby_update') {
+        updateLobbyPlayerList(data.players);
+    } else if (data.type === 'start_game') {
+        activePlayers = data.activePlayers;
+        playerTypes = data.playerTypes;
+        hideAllScreens();
+        document.getElementById('mode-badge').innerText = `Online Link (${myAssignedColor.toUpperCase()})`;
+        document.getElementById('game-screen').style.display = 'block';
+        resetGame();
+    } else if (data.type === 'roll_action') {
+        rollPits(data.player, data.forcedRoll, true);
+    } else if (data.type === 'yard_release_action') {
+        executeYardRelease(data.player, data.targetTokenIds, true);
+    } else if (data.type === 'board_move_action') {
+        let token = tokens[data.player].find(t => t.id === data.tokenId);
+        executeBoardMove(data.player, token, data.steps, true);
+    }
+}
+
+function broadcastLobbyState() {
+    let playerList = ['red (Host)'];
+    roomConnections.forEach((c, i) => {
+        playerList.push(`${ALL_PLAYERS[i + 1]}`);
+    });
+    updateLobbyPlayerList(playerList);
+    broadcastNetworkData({ type: 'lobby_update', players: playerList });
+}
+
+function setupLobbyUI() {
+    hideAllScreens();
+    document.getElementById('lobby-code-display').innerText = currentRoomCode;
+    document.getElementById('start-link-game-btn').style.display = isHost ? 'block' : 'none';
+    document.getElementById('lobby-menu').style.display = 'flex';
+}
+
+function updateLobbyPlayerList(players) {
+    let list = document.getElementById('lobby-player-list');
+    list.innerHTML = players.map(p => `<li style="padding:4px 0; color:var(--yard-border);">🎮 Player ${p.toUpperCase()}</li>`).join('');
+}
+
+function copyRoomLink() {
+    let url = `${window.location.origin}${window.location.pathname}?room=${currentRoomCode}`;
+    navigator.clipboard.writeText(url);
+    showModal("Link Copied", "Share this invite link or code with your friends!");
+}
+
+function leaveLinkLobby() {
+    if (peer) peer.destroy();
+    showMainMenu();
+}
+
+function hostStartLinkGame() {
+    if (!isHost) return;
+    activePlayers = ['red'];
+    playerTypes = { red: 'human' };
+
+    roomConnections.forEach((c, i) => {
+        let color = ALL_PLAYERS[i + 1];
+        activePlayers.push(color);
+        playerTypes[color] = 'human';
+    });
+
+    broadcastNetworkData({
+        type: 'start_game',
+        activePlayers: activePlayers,
+        playerTypes: playerTypes
+    });
+
+    hideAllScreens();
+    document.getElementById('mode-badge').innerText = `Online Link (RED)`;
+    document.getElementById('game-screen').style.display = 'block';
+    resetGame();
+}
+
+/* Check URL Params for direct room join link */
+window.addEventListener('DOMContentLoaded', () => {
+    let params = new URLSearchParams(window.location.search);
+    let roomParam = params.get('room');
+    if (roomParam) {
+        joinRoom(roomParam.toUpperCase());
+    }
+});
+
+/* ===================================================
+   EXISTING GAME ENGINE WITH LINK SYNC HOOKS
+   =================================================== */
 let audioCtx = null;
 
 function getAudioContext() {
@@ -15,9 +210,7 @@ function getAudioContext() {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AudioContext();
     }
-    if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
-    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
     return audioCtx;
 }
 
@@ -33,7 +226,6 @@ function playSound(type) {
         const now = ctx.currentTime;
 
         if (type === 'roll') {
-            // Pit rattle sound
             for (let i = 0; i < 4; i++) {
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
@@ -47,7 +239,6 @@ function playSound(type) {
                 osc.stop(now + i * 0.04 + 0.03);
             }
         } else if (type === 'step') {
-            // Lightweight tap sound
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
             osc.type = 'triangle';
@@ -59,7 +250,6 @@ function playSound(type) {
             osc.start(now);
             osc.stop(now + 0.05);
         } else if (type === 'release') {
-            // Yard release sweep sound
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
             osc.type = 'sine';
@@ -72,7 +262,6 @@ function playSound(type) {
             osc.start(now);
             osc.stop(now + 0.15);
         } else if (type === 'capture') {
-            // Crunchy capture/attack sound
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
             osc.type = 'sawtooth';
@@ -84,22 +273,7 @@ function playSound(type) {
             gain.connect(ctx.destination);
             osc.start(now);
             osc.stop(now + 0.2);
-        } else if (type === 'home') {
-            // Reaching home sound
-            [523.25, 659.25].forEach((freq, i) => {
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.type = 'sine';
-                osc.frequency.setValueAtTime(freq, now + i * 0.1);
-                gain.gain.setValueAtTime(0.15, now + i * 0.1);
-                gain.gain.exponentialRampToValueAtTime(0.01, now + i * 0.1 + 0.2);
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.start(now + i * 0.1);
-                osc.stop(now + i * 0.1 + 0.2);
-            });
         } else if (type === 'victory') {
-            // Winning fanfare sequence
             const notes = [440, 554.37, 659.25, 880];
             notes.forEach((freq, i) => {
                 const osc = ctx.createOscillator();
@@ -114,9 +288,103 @@ function playSound(type) {
                 osc.stop(now + i * 0.12 + 0.25);
             });
         }
-    } catch (e) {
-        console.log("Audio not allowed yet or not supported.");
+    } catch (e) {}
+}
+
+function hideAllScreens() {
+    document.getElementById('main-menu').style.display = 'none';
+    document.getElementById('link-menu').style.display = 'none';
+    document.getElementById('lobby-menu').style.display = 'none';
+    document.getElementById('player-count-menu').style.display = 'none';
+    document.getElementById('cpu-prompt-menu').style.display = 'none';
+    document.getElementById('difficulty-menu').style.display = 'none';
+    document.getElementById('game-screen').style.display = 'none';
+}
+
+function showMainMenu() {
+    isObserving = false;
+    hideAllScreens();
+    document.getElementById('main-menu').style.display = 'flex';
+}
+
+function showPlayerCountMenu() {
+    hideAllScreens();
+    document.getElementById('player-count-menu').style.display = 'flex';
+}
+
+function startVsComputerSolo() {
+    selectedHumanCount = 1;
+    fillWithCpu = true;
+    showDifficultyMenuForFill();
+}
+
+function selectPlayerCount(count) {
+    selectedHumanCount = count;
+    if (count === 4) {
+        fillWithCpu = false;
+        configureAndStartGame();
+    } else {
+        hideAllScreens();
+        document.getElementById('cpu-prompt-text').innerText = 
+            `You selected ${count} human player${count > 1 ? 's' : ''}. Fill remaining ${4 - count} slot${(4 - count) > 1 ? 's' : ''} with CPU bots?`;
+        document.getElementById('cpu-prompt-menu').style.display = 'flex';
     }
+}
+
+function showDifficultyMenuForFill() {
+    hideAllScreens();
+    document.getElementById('difficulty-menu').style.display = 'flex';
+}
+
+function handleDifficultyBack() {
+    if (selectedHumanCount === 1) showMainMenu();
+    else { hideAllScreens(); document.getElementById('cpu-prompt-menu').style.display = 'flex'; }
+}
+
+function startLocalGameWithoutCpu() {
+    fillWithCpu = false;
+    configureAndStartGame();
+}
+
+function confirmDifficultyAndStart(difficulty) {
+    aiDifficulty = difficulty;
+    fillWithCpu = true;
+    configureAndStartGame();
+}
+
+function configureAndStartGame() {
+    activePlayers = [];
+    playerTypes = {};
+    isObserving = false;
+
+    for (let i = 0; i < 4; i++) {
+        let color = ALL_PLAYERS[i];
+        if (i < selectedHumanCount) {
+            activePlayers.push(color);
+            playerTypes[color] = 'human';
+        } else if (fillWithCpu) {
+            activePlayers.push(color);
+            playerTypes[color] = 'bot';
+        }
+    }
+
+    let badgeText = `${selectedHumanCount} Player${selectedHumanCount > 1 ? 's' : ''}`;
+    if (fillWithCpu && selectedHumanCount < 4) {
+        const diffNames = ["Lvl 1 CPU", "Lvl 2 CPU", "Lvl 3 CPU 😈"];
+        badgeText += ` + ${diffNames[aiDifficulty - 1]}`;
+    }
+    document.getElementById('mode-badge').innerText = badgeText;
+
+    hideAllScreens();
+    document.getElementById('game-screen').style.display = 'block';
+    resetGame();
+}
+
+function confirmReturnToMenu() {
+    showModal("Return to Menu?", "Your current game progress will be reset.", "Yes, Quit", () => {
+        if (peer) peer.destroy();
+        showMainMenu();
+    });
 }
 
 const GOAL_CELL = 12;
@@ -158,7 +426,6 @@ const layoutControls = {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-/* Theme Switcher Function */
 function changeTheme(themeName) {
     document.body.setAttribute('data-theme', themeName);
 }
@@ -169,7 +436,6 @@ function initBoard() {
 
     for (let p in layoutControls) {
         let cfg = layoutControls[p];
-        
         const btn = document.createElement('button');
         btn.id = `btn-${p}`;
         btn.className = 'throw-btn';
@@ -193,13 +459,8 @@ function initBoard() {
             const cell = document.createElement('div');
             cell.className = 'cell';
             cell.dataset.index = cellIndex;
-            
-            if (cellIndex === GOAL_CELL) {
-                cell.classList.add('goal-zone');
-            } else if (safeCells.includes(cellIndex)) {
-                cell.classList.add('safe-zone');
-            }
-            
+            if (cellIndex === GOAL_CELL) cell.classList.add('goal-zone');
+            else if (safeCells.includes(cellIndex)) cell.classList.add('safe-zone');
             cell.style.gridRowStart = r;
             cell.style.gridColumnStart = c;
             board.appendChild(cell);
@@ -209,8 +470,11 @@ function initBoard() {
     updateUI();
 }
 
-function rollPits(playerColor, forcedRoll = null) {
-    if (gameState !== 'waiting_for_roll' || PLAYERS[currentPlayerIndex] !== playerColor) return;
+function rollPits(playerColor, forcedRoll = null, isRemote = false) {
+    if (gameState !== 'waiting_for_roll' || activePlayers[currentPlayerIndex] !== playerColor) return;
+
+    // Direct Online restriction: Only active assigned player can roll
+    if (myAssignedColor && playerColor !== myAssignedColor && !isRemote && playerTypes[playerColor] === 'human') return;
 
     playSound('roll');
 
@@ -226,6 +490,10 @@ function rollPits(playerColor, forcedRoll = null) {
             pits.push(outcome);
             if (outcome === 1) roundCount++;
         }
+    }
+
+    if (!isRemote && (peer && (isHost || hostConn))) {
+        broadcastNetworkData({ type: 'roll_action', player: playerColor, forcedRoll: forcedRoll });
     }
 
     for (let i = 0; i < 4; i++) {
@@ -280,8 +548,6 @@ function evaluateMoves(player, roll, yardReleaseMax) {
                     if (step === roll) { tempPos = GOAL_CELL; tempZone = 'goal'; }
                     else tempPos = 0;
                 }
-            } else if (tempZone === 'goal') {
-                break;
             }
             pathSteps.push({ pos: tempPos, zone: tempZone });
         }
@@ -297,16 +563,6 @@ function evaluateMoves(player, roll, yardReleaseMax) {
         return;
     }
 
-    if (possibleMoves.length > 1) {
-        let firstMove = possibleMoves[0];
-        let allIdentical = possibleMoves.every(m => {
-            if (m.type !== firstMove.type) return false;
-            if (m.type === 'yard_release') return true;
-            return m.token.zone === firstMove.token.zone && m.token.pos === firstMove.token.pos;
-        });
-        if (allIdentical) possibleMoves = [firstMove];
-    }
-
     if (possibleMoves.length === 1) {
         let move = possibleMoves[0];
         if (move.type === 'yard_release') executeYardRelease(player, move.targetTokens);
@@ -317,7 +573,12 @@ function evaluateMoves(player, roll, yardReleaseMax) {
     }
 }
 
-function executeYardRelease(player, targetTokens) {
+function executeYardRelease(player, targetTokens, isRemote = false) {
+    if (!isRemote && (peer && (isHost || hostConn))) {
+        let ids = targetTokens.map(t => t.id);
+        broadcastNetworkData({ type: 'yard_release_action', player: player, targetTokenIds: ids });
+    }
+
     playSound('release');
     targetTokens.forEach(token => { token.zone = 'outer'; token.pos = 0; });
     if (checkCaptures(player, startCells[player])) bonusTurnsRemaining += 1;
@@ -326,7 +587,11 @@ function executeYardRelease(player, targetTokens) {
     completeTurn();
 }
 
-async function executeBoardMove(player, token, steps) {
+async function executeBoardMove(player, token, steps, isRemote = false) {
+    if (!isRemote && (peer && (isHost || hostConn))) {
+        broadcastNetworkData({ type: 'board_move_action', player: player, tokenId: token.id, steps: steps });
+    }
+
     clearHighlights();
     gameState = 'animating';
 
@@ -345,11 +610,9 @@ async function executeBoardMove(player, token, steps) {
     if (finalStep.zone === 'outer') actualBoardCell = path.outer[finalStep.pos];
     else if (finalStep.zone === 'inner') actualBoardCell = path.inner[finalStep.pos];
 
-    if (finalStep.zone === 'goal') {
-        playSound('home');
-    } else if (checkCaptures(player, actualBoardCell)) {
-        bonusTurnsRemaining += 1;
-    }
+    if (finalStep.zone === 'goal') playSound('home');
+    else if (checkCaptures(player, actualBoardCell)) bonusTurnsRemaining += 1;
+    
     completeTurn();
 }
 
@@ -357,7 +620,7 @@ function checkCaptures(activePlayer, boardCellIndex) {
     if (safeCells.includes(boardCellIndex)) return false;
     let capturedAny = false;
 
-    PLAYERS.forEach(opp => {
+    activePlayers.forEach(opp => {
         if (opp === activePlayer) return;
         tokens[opp].forEach(token => {
             let oppActualCell = -1;
@@ -377,43 +640,72 @@ function checkCaptures(activePlayer, boardCellIndex) {
 }
 
 function completeTurn() {
-    let activePlayer = PLAYERS[currentPlayerIndex];
+    let activePlayer = activePlayers[currentPlayerIndex];
     let completedAll = tokens[activePlayer].every(t => t.zone === 'goal' || t.zone === 'finished');
     
     if (completedAll && !finishedPlayers.includes(activePlayer)) {
         finishedPlayers.push(activePlayer);
         tokens[activePlayer].forEach(t => t.zone = 'finished');
+
+        let isHumanWinner = (playerTypes[activePlayer] === 'human' && finishedPlayers.length === 1);
+        let hasRemainingBots = activePlayers.some(p => !finishedPlayers.includes(p) && playerTypes[p] === 'bot');
+
+        if (isHumanWinner && hasRemainingBots && !isObserving && !peer) {
+            playSound('victory');
+            showModal(
+                "🥇 You Won 1st Place!",
+                "Great job! Would you like to exit to the main menu or observe the CPUs finish the match?",
+                "🏠 Main Menu",
+                () => { showMainMenu(); },
+                "👁️ Observe CPUs",
+                () => {
+                    isObserving = true;
+                    document.getElementById('mode-badge').innerText = "👁️ Spectating CPUs";
+                    continueTurnProgression();
+                }
+            );
+            return;
+        }
     }
 
-    if (finishedPlayers.length === 3) {
+    let winningThreshold = activePlayers.length - 1;
+    if (finishedPlayers.length >= winningThreshold && activePlayers.length > 1) {
         playSound('victory');
-        let loser = PLAYERS.find(p => !finishedPlayers.includes(p));
-        const suffixes = ['1st', '2nd', '3rd'];
+        let loser = activePlayers.find(p => !finishedPlayers.includes(p));
+        const suffixes = ['1st', '2nd', '3rd', '4th'];
         let rankSummary = finishedPlayers.map((p, i) => `${suffixes[i]} Place: ${p.toUpperCase()}`).join('\n');
-        
-        showModal(
-            "🏆 Game Over!", 
-            `${rankSummary}\n\n💀 ${loser.toUpperCase()} is the LOSER!`, 
-            "Play Again", 
-            () => { resetGame(); }
-        );
+        rankSummary += `\n💀 ${suffixes[finishedPlayers.length]} Place (Loser): ${loser.toUpperCase()}`;
+
+        showModal("🏆 Game Complete!", rankSummary, "Main Menu", () => { showMainMenu(); });
         return;
     }
 
+    continueTurnProgression();
+}
+
+function continueTurnProgression() {
     if (bonusTurnsRemaining > 0) {
         bonusTurnsRemaining--;
         gameState = 'waiting_for_roll';
     } else {
         do {
-            currentPlayerIndex = (currentPlayerIndex + 1) % PLAYERS.length;
-        } while (finishedPlayers.includes(PLAYERS[currentPlayerIndex]));
+            currentPlayerIndex = (currentPlayerIndex + 1) % activePlayers.length;
+        } while (finishedPlayers.includes(activePlayers[currentPlayerIndex]));
         
         gameState = 'waiting_for_roll';
     }
+
     updateUI();
+
+    let nextPlayer = activePlayers[currentPlayerIndex];
+    if (playerTypes[nextPlayer] === 'bot' && gameState === 'waiting_for_roll' && (!peer || isHost)) {
+        setTimeout(() => rollPits(nextPlayer), 600);
+    }
 }
 
 function highlightSelectableOptions(player, possibleMoves) {
+    if (myAssignedColor && player !== myAssignedColor && playerTypes[player] === 'human') return;
+
     possibleMoves.forEach(move => {
         if (move.type === 'yard_release') {
             const yardElement = document.getElementById(`yard-${player}`);
@@ -444,7 +736,7 @@ function highlightSelectableOptions(player, possibleMoves) {
 }
 
 function clearHighlights() {
-    PLAYERS.forEach(p => {
+    ALL_PLAYERS.forEach(p => {
         const yardElement = document.getElementById(`yard-${p}`);
         if (yardElement) { yardElement.classList.remove('highlight-selectable'); yardElement.onclick = null; }
     });
@@ -454,16 +746,30 @@ function clearHighlights() {
 }
 
 function updateUI() {
-    const rankLabels = ['1st', '2nd', '3rd', ''];
+    const rankLabels = ['1st', '2nd', '3rd', '4th'];
 
-    PLAYERS.forEach((player, idx) => {
+    ALL_PLAYERS.forEach((player) => {
         const btn = document.getElementById(`btn-${player}`);
-        if (!btn) return;
+        const yardElement = document.getElementById(`yard-${player}`);
+
+        let isActiveInGame = activePlayers.includes(player);
+
+        if (!isActiveInGame) {
+            if (btn) btn.style.visibility = 'hidden';
+            if (yardElement) yardElement.style.opacity = '0.15';
+            return;
+        } else {
+            if (btn) btn.style.visibility = 'visible';
+            if (yardElement) yardElement.style.opacity = '1';
+        }
+
+        let isCurrentTurn = (activePlayers[currentPlayerIndex] === player);
+        let isMyTurnInLink = (!myAssignedColor || myAssignedColor === player);
 
         if (finishedPlayers.includes(player)) {
             btn.classList.remove('active-turn-btn');
             btn.disabled = true;
-        } else if (idx === currentPlayerIndex && gameState === 'waiting_for_roll') {
+        } else if (isCurrentTurn && gameState === 'waiting_for_roll' && isMyTurnInLink) {
             btn.classList.add('active-turn-btn');
             btn.disabled = false;
         } else {
@@ -471,7 +777,6 @@ function updateUI() {
             btn.disabled = true;
         }
 
-        const yardElement = document.getElementById(`yard-${player}`);
         if (yardElement) {
             yardElement.innerHTML = '';
             
@@ -498,7 +803,7 @@ function updateUI() {
         cell.querySelectorAll('.token').forEach(t => t.remove());
     });
 
-    PLAYERS.forEach(player => {
+    activePlayers.forEach(player => {
         tokens[player].forEach(token => {
             let targetCellIndex = -1;
             let path = playerPaths[player];
@@ -519,15 +824,29 @@ function updateUI() {
     });
 }
 
-function showModal(title, message, buttonText, onButtonClickCallback) {
+function showModal(title, message, btn1Text = "OK", btn1Callback = null, btn2Text = null, btn2Callback = null) {
     document.getElementById('modal-title').innerText = title;
     document.getElementById('modal-message').innerText = message;
-    const btn = document.getElementById('modal-btn');
-    btn.innerText = buttonText;
-    btn.onclick = () => {
+    
+    const primaryBtn = document.getElementById('modal-btn-primary');
+    primaryBtn.innerText = btn1Text;
+    primaryBtn.onclick = () => {
         closeModal();
-        if (onButtonClickCallback) onButtonClickCallback();
+        if (btn1Callback) btn1Callback();
     };
+
+    const secondaryBtn = document.getElementById('modal-btn-secondary');
+    if (btn2Text) {
+        secondaryBtn.style.display = 'block';
+        secondaryBtn.innerText = btn2Text;
+        secondaryBtn.onclick = () => {
+            closeModal();
+            if (btn2Callback) btn2Callback();
+        };
+    } else {
+        secondaryBtn.style.display = 'none';
+    }
+
     document.getElementById('game-modal').style.display = 'flex';
 }
 
@@ -541,6 +860,7 @@ function resetGame() {
     lastRollValue = 0;
     bonusTurnsRemaining = 0;
     finishedPlayers = [];
+    isObserving = false;
     tokens = {
         red: [{id:0, pos:-1, zone:'yard'}, {id:1, pos:-1, zone:'yard'}, {id:2, pos:-1, zone:'yard'}, {id:3, pos:-1, zone:'yard'}],
         green: [{id:0, pos:-1, zone:'yard'}, {id:1, pos:-1, zone:'yard'}, {id:2, pos:-1, zone:'yard'}, {id:3, pos:-1, zone:'yard'}],
@@ -550,26 +870,7 @@ function resetGame() {
     initBoard();
 }
 
-/* DEVELOPER SECRET CHEAT CODES */
-window.addEventListener('keydown', (e) => {
-    let activePlayer = PLAYERS[currentPlayerIndex];
-
-    if (e.key === '8') {
-        if (gameState === 'waiting_for_roll') rollPits(activePlayer, 8);
-    }
-    else if (e.key === '4') {
-        if (gameState === 'waiting_for_roll') rollPits(activePlayer, 4);
-    }
-    else if (e.key.toLowerCase() === 'w') {
-        tokens[activePlayer][0] = { id: 0, pos: GOAL_CELL, zone: 'goal' };
-        tokens[activePlayer][1] = { id: 1, pos: GOAL_CELL, zone: 'goal' };
-        tokens[activePlayer][2] = { id: 2, pos: GOAL_CELL, zone: 'goal' };
-        tokens[activePlayer][3] = { id: 3, pos: playerPaths[activePlayer].inner.length - 1, zone: 'inner' };
-        
-        updateUI();
-        document.getElementById('roll-status').innerText = `${activePlayer.toUpperCase()} is 1 step away from victory!`;
-    }
-});
-
-window.onload = initBoard;
+window.onload = () => {
+    showMainMenu();
+};
 
