@@ -112,6 +112,14 @@ function broadcastNetworkData(data) {
     }
 }
 
+function setupLobbyUI() {
+    hideAllScreens();
+    document.getElementById('lobby-code-display').innerText = currentRoomCode;
+    // Guarantee start button displays for Host only
+    document.getElementById('start-link-game-btn').style.display = isHost ? 'block' : 'none';
+    document.getElementById('lobby-menu').style.display = 'flex';
+}
+
 function handleNetworkData(data) {
     if (data.type === 'init_client') {
         myAssignedColor = data.color;
@@ -119,6 +127,9 @@ function handleNetworkData(data) {
         setupLobbyUI();
     } else if (data.type === 'lobby_update') {
         updateLobbyPlayerList(data.players);
+        if (isHost) {
+            document.getElementById('start-link-game-btn').style.display = 'block';
+        }
     } else if (data.type === 'start_game') {
         activePlayers = data.activePlayers;
         playerTypes = data.playerTypes;
@@ -137,19 +148,12 @@ function handleNetworkData(data) {
 }
 
 function broadcastLobbyState() {
-    let playerList = ['red (Host)'];
+    let playerList = ['red (HOST)'];
     roomConnections.forEach((c, i) => {
         playerList.push(`${ALL_PLAYERS[i + 1]}`);
     });
     updateLobbyPlayerList(playerList);
     broadcastNetworkData({ type: 'lobby_update', players: playerList });
-}
-
-function setupLobbyUI() {
-    hideAllScreens();
-    document.getElementById('lobby-code-display').innerText = currentRoomCode;
-    document.getElementById('start-link-game-btn').style.display = isHost ? 'block' : 'none';
-    document.getElementById('lobby-menu').style.display = 'flex';
 }
 
 function updateLobbyPlayerList(players) {
@@ -170,6 +174,7 @@ function leaveLinkLobby() {
 
 function hostStartLinkGame() {
     if (!isHost) return;
+
     activePlayers = ['red'];
     playerTypes = { red: 'human' };
 
@@ -179,19 +184,20 @@ function hostStartLinkGame() {
         playerTypes[color] = 'human';
     });
 
-    broadcastNetworkData({
+    let payload = {
         type: 'start_game',
         activePlayers: activePlayers,
         playerTypes: playerTypes
-    });
+    };
+
+    broadcastNetworkData(payload);
 
     hideAllScreens();
-    document.getElementById('mode-badge').innerText = `Online Link (RED)`;
+    document.getElementById('mode-badge').innerText = `Online Link (RED - HOST)`;
     document.getElementById('game-screen').style.display = 'block';
     resetGame();
 }
 
-/* Check URL Params for direct room join link */
 window.addEventListener('DOMContentLoaded', () => {
     let params = new URLSearchParams(window.location.search);
     let roomParam = params.get('room');
@@ -201,7 +207,7 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 /* ===================================================
-   EXISTING GAME ENGINE WITH LINK SYNC HOOKS
+   GAME ENGINE LOGIC & SOUNDS
    =================================================== */
 let audioCtx = null;
 
@@ -473,7 +479,6 @@ function initBoard() {
 function rollPits(playerColor, forcedRoll = null, isRemote = false) {
     if (gameState !== 'waiting_for_roll' || activePlayers[currentPlayerIndex] !== playerColor) return;
 
-    // Direct Online restriction: Only active assigned player can roll
     if (myAssignedColor && playerColor !== myAssignedColor && !isRemote && playerTypes[playerColor] === 'human') return;
 
     playSound('roll');
@@ -610,7 +615,7 @@ async function executeBoardMove(player, token, steps, isRemote = false) {
     if (finalStep.zone === 'outer') actualBoardCell = path.outer[finalStep.pos];
     else if (finalStep.zone === 'inner') actualBoardCell = path.inner[finalStep.pos];
 
-    if (finalStep.zone === 'goal') playSound('home');
+    if (finalStep.zone === 'goal') playSound('victory');
     else if (checkCaptures(player, actualBoardCell)) bonusTurnsRemaining += 1;
     
     completeTurn();
@@ -657,7 +662,7 @@ function completeTurn() {
                 "Great job! Would you like to exit to the main menu or observe the CPUs finish the match?",
                 "🏠 Main Menu",
                 () => { showMainMenu(); },
-                "👁️ Observe CPUs",
+                "👁️ Spectate CPUs",
                 () => {
                     isObserving = true;
                     document.getElementById('mode-badge').innerText = "👁️ Spectating CPUs";
