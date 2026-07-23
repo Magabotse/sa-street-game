@@ -489,6 +489,9 @@ function rollPits(playerColor, forcedRoll = null, isRemote = false) {
     if (forcedRoll !== null) {
         if (forcedRoll === 8) { pits = [0,0,0,0]; roundCount = 0; }
         else if (forcedRoll === 4) { pits = [1,1,1,1]; roundCount = 4; }
+        else if (forcedRoll === 3) { pits = [1,1,1,0]; roundCount = 3; }
+        else if (forcedRoll === 2) { pits = [1,1,0,0]; roundCount = 2; }
+        else if (forcedRoll === 1) { pits = [1,0,0,0]; roundCount = 1; }
     } else {
         for (let i = 0; i < 4; i++) {
             let outcome = Math.floor(Math.random() * 2);
@@ -497,20 +500,20 @@ function rollPits(playerColor, forcedRoll = null, isRemote = false) {
         }
     }
 
-    if (!isRemote && (peer && (isHost || hostConn))) {
-        broadcastNetworkData({ type: 'roll_action', player: playerColor, forcedRoll: forcedRoll });
-    }
-
-    for (let i = 0; i < 4; i++) {
-        document.getElementById(`pit-${i}`).className = 'pit ' + (pits[i] === 0 ? 'flat' : 'round');
-    }
-
     let rollValue = 0, extraTurnsEarned = 0, yardReleaseMax = 0;
     if (roundCount === 1) rollValue = 1;
     else if (roundCount === 2) rollValue = 2;
     else if (roundCount === 3) { rollValue = 3; yardReleaseMax = 1; }
     else if (roundCount === 4) { rollValue = 4; yardReleaseMax = 2; extraTurnsEarned = 1; }
     else if (roundCount === 0) { rollValue = 8; yardReleaseMax = 4; extraTurnsEarned = 2; }
+
+    if (!isRemote && (peer && (isHost || hostConn))) {
+        broadcastNetworkData({ type: 'roll_action', player: playerColor, forcedRoll: rollValue });
+    }
+
+    for (let i = 0; i < 4; i++) {
+        document.getElementById(`pit-${i}`).className = 'pit ' + (pits[i] === 0 ? 'flat' : 'round');
+    }
 
     lastRollValue = rollValue;
     bonusTurnsRemaining += extraTurnsEarned;
