@@ -42,7 +42,7 @@ function createRoom() {
 
     peer = new Peer(`sagame-${currentRoomCode}`);
 
-    peer.on('open', (id) => {
+    peer.on('open', () => {
         setupLobbyUI();
     });
 
@@ -61,7 +61,7 @@ function createRoom() {
             broadcastLobbyState();
         });
 
-        conn.on('data', (data) => handleNetworkData(data));
+        conn.on('data', (data) => handleNetworkData(data, conn));
 
         conn.on('close', () => {
             roomConnections = roomConnections.filter(c => c !== conn);
@@ -69,7 +69,7 @@ function createRoom() {
         });
     });
 
-    peer.on('error', (err) => {
+    peer.on('error', () => {
         showModal("Connection Error", "Could not create room. Try again.");
     });
 }
@@ -88,22 +88,19 @@ function joinRoom(code) {
     peer.on('open', () => {
         hostConn = peer.connect(`sagame-${code}`);
 
-        hostConn.on('open', () => {
-            // Connected to host
-        });
-
-        hostConn.on('data', (data) => handleNetworkData(data));
-
+        hostConn.on('open', () => {});
+        hostConn.on('data', (data) => handleNetworkData(data, hostConn));
         hostConn.on('close', () => {
             showModal("Disconnected", "Host closed the room.", "OK", () => showMainMenu());
         });
     });
 
-    peer.on('error', (err) => {
+    peer.on('error', () => {
         showModal("Join Error", "Room not found or unavailable.");
     });
 }
 
+// Broadcasts data to all connections (Host -> Clients or Client -> Host)
 function broadcastNetworkData(data) {
     if (isHost) {
         roomConnections.forEach(c => c.send(data));
@@ -115,12 +112,11 @@ function broadcastNetworkData(data) {
 function setupLobbyUI() {
     hideAllScreens();
     document.getElementById('lobby-code-display').innerText = currentRoomCode;
-    // Guarantee start button displays for Host only
     document.getElementById('start-link-game-btn').style.display = isHost ? 'block' : 'none';
     document.getElementById('lobby-menu').style.display = 'flex';
 }
 
-function handleNetworkData(data) {
+function handleNetworkData(data, senderConn = null) {
     if (data.type === 'init_client') {
         myAssignedColor = data.color;
         currentRoomCode = data.roomCode;
@@ -134,16 +130,39 @@ function handleNetworkData(data) {
         activePlayers = data.activePlayers;
         playerTypes = data.playerTypes;
         hideAllScreens();
-        document.getElementById('mode-badge').innerText = `Online Link (${myAssignedColor.toUpperCase()})`;
+        document.getElementById('mode-badge').innerText = `Online Link (${myAssignedColor ? myAssignedColor.toUpperCase() : 'SPECTATOR'})`;
         document.getElementById('game-screen').style.display = 'block';
         resetGame();
     } else if (data.type === 'roll_action') {
-        rollPits(data.player, data.forcedRoll, true);
+        // If host receives action from client, relay to other clients
+        if (isHost) {
+            roomConnections.forEach(c => {
+                if (c !== senderConn) c.send(data);
+            });
+        }
+        rollPits(data.player, data.forcedRoll, data.forcedPits, true);
     } else if (data.type === 'yard_release_action') {
-        executeYardRelease(data.player, data.targetTokenIds, true);
+        if (isHost) {
+            roomConnections.forEach(c => {
+                if (c !== senderConn) c.send(data);
+            });
+        }
+        let targetTokens = tokens[data.player].filter(t => data.targetTokenIds.includes(t.id));
+        executeYardRelease(data.player, targetTokens, true);
     } else if (data.type === 'board_move_action') {
+        if (isHost) {
+            roomConnections.forEach(c => {
+                if (c !== senderConn) c.send(data);
+            });
+        }
         let token = tokens[data.player].find(t => t.id === data.tokenId);
         executeBoardMove(data.player, token, data.steps, true);
+    } else if (data.type === 'sync_turn_state') {
+        // Keeps extra turns and turn index locked in sync across network
+        currentPlayerIndex = data.currentPlayerIndex;
+        bonusTurnsRemaining = data.bonusTurnsRemaining;
+        gameState = data.gameState;
+        updateUI();
     }
 }
 
@@ -476,7 +495,7 @@ function initBoard() {
     updateUI();
 }
 
-function rollPits(playerColor, forcedRoll = null, isRemote = false) {
+function rollPits(playerColor, forcedRoll = null, forcedPits = null, isRemote = false) {
     if (gameState !== 'waiting_for_roll' || activePlayers[currentPlayerIndex] !== playerColor) return;
 
     if (myAssignedColor && playerColor !== myAssignedColor && !isRemote && playerTypes[playerColor] === 'human') return;
@@ -486,12 +505,9 @@ function rollPits(playerColor, forcedRoll = null, isRemote = false) {
     let pits = [];
     let roundCount = 0;
 
-    if (forcedRoll !== null) {
-        if (forcedRoll === 8) { pits = [0,0,0,0]; roundCount = 0; }
-        else if (forcedRoll === 4) { pits = [1,1,1,1]; roundCount = 4; }
-        else if (forcedRoll === 3) { pits = [1,1,1,0]; roundCount = 3; }
-        else if (forcedRoll === 2) { pits = [1,1,0,0]; roundCount = 2; }
-        else if (forcedRoll === 1) { pits = [1,0,0,0]; roundCount = 1; }
+    if (forcedPits !== null) {
+        pits = forcedPits;
+        roundCount = pits.reduce((acc, val) => acc + val, 0);
     } else {
         for (let i = 0; i < 4; i++) {
             let outcome = Math.floor(Math.random() * 2);
@@ -507,8 +523,15 @@ function rollPits(playerColor, forcedRoll = null, isRemote = false) {
     else if (roundCount === 4) { rollValue = 4; yardReleaseMax = 2; extraTurnsEarned = 1; }
     else if (roundCount === 0) { rollValue = 8; yardReleaseMax = 4; extraTurnsEarned = 2; }
 
+    if (forcedRoll !== null) rollValue = forcedRoll;
+
     if (!isRemote && (peer && (isHost || hostConn))) {
-        broadcastNetworkData({ type: 'roll_action', player: playerColor, forcedRoll: rollValue });
+        broadcastNetworkData({ 
+            type: 'roll_action', 
+            player: playerColor, 
+            forcedRoll: rollValue,
+            forcedPits: pits
+        });
     }
 
     for (let i = 0; i < 4; i++) {
@@ -701,6 +724,16 @@ function continueTurnProgression() {
         } while (finishedPlayers.includes(activePlayers[currentPlayerIndex]));
         
         gameState = 'waiting_for_roll';
+    }
+
+    // Host sends authority turn packet to ensure all peers lock onto exact same turn/bonus status
+    if (isHost && peer) {
+        broadcastNetworkData({
+            type: 'sync_turn_state',
+            currentPlayerIndex: currentPlayerIndex,
+            bonusTurnsRemaining: bonusTurnsRemaining,
+            gameState: gameState
+        });
     }
 
     updateUI();
